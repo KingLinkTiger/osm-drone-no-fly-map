@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Drone No-Fly Zones</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100vh; width: 100%; }
+    .toolbar {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1000;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+      font-family: sans-serif;
+      width: 280px;
+    }
+    .toolbar input, .toolbar button {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
+      padding: 8px;
+    }
+    .note { font-size: 12px; color: #555; margin-top: 8px; line-height: 1.3; }
+    .popup-title { font-weight: 700; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div><strong>Drone No-Fly Zones</strong></div>
+    <input id="searchInput" type="text" placeholder="Search a location..." />
+    <button id="searchBtn">Search</button>
+    <button id="resetBtn">Reset View</button>
+    <div class="note">
+      Red overlays show source-reported drone restriction zones from FAA, EASA, and DJI.
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const style = {
+      color: '#b30000',
+      weight: 2,
+      fillColor: '#ff0000',
+      fillOpacity: 0.28
+    };
+
+    function popupHTML(props) {
+      return `
+        <div class="popup-title">${props.name || 'Restricted Zone'}</div>
+        <div><b>Authority:</b> ${props.authority || 'Unknown'}</div>
+        <div><b>Restriction:</b> ${props.restriction_type || 'Restricted'}</div>
+        <div><b>Details:</b> ${props.description || 'No details provided.'}</div>
+        <div><b>Effective:</b> ${props.effective_date || 'Unknown'}</div>
+        <div style="margin-top:6px;">
+          <a href="${props.source_url || '#'}" target="_blank" rel="noopener">Source</a>
+        </div>
+      `;
+    }
+
+    async function loadGeoJSON(url, label) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Failed to load ${label}`);
+      const data = await res.json();
+
+      const layer = L.geoJSON(data, {
+        style,
+        onEachFeature: (feature, lyr) => {
+          const props = feature.properties || {};
+          lyr.bindPopup(popupHTML(props), { maxWidth: 320 });
+        }
+      });
+
+      return layer;
+    }
+
+    const faaLayer = await loadGeoJSON('./faa.geojson', 'FAA');
+    const easaLayer = await loadGeoJSON('./easa.geojson', 'EASA');
+    const djiLayer = await loadGeoJSON('./dji.geojson', 'DJI');
+
+    const overlays = {
+      'FAA Zones': faaLayer,
+      'EASA Zones': easaLayer,
+      'DJI Zones': djiLayer
+    };
+
+    faaLayer.addTo(map);
+    easaLayer.addTo(map);
+    djiLayer.addTo(map);
+
+    L.control.layers(null, overlays, { collapsed: false }).addTo(map);
+
+    const group = L.featureGroup([faaLayer, easaLayer, djiLayer]);
+    if (group.getLayers().length) map.fitBounds(group.getBounds(), { padding: [20, 20] });
+
+    document.getElementById('resetBtn').onclick = () => {
+      map.setView([20, 0], 2);
+    };
+
+    async function searchLocation(query) {
+      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query)}`;
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json' }
+      });
+      const results = await res.json();
+      if (!results.length) {
+        alert('Location not found');
+        return;
+      }
+      const first = results[0];
+      const lat = parseFloat(first.lat);
+      const lon = parseFloat(first.lon);
+      map.setView([lat, lon], 10);
+      L.marker([lat, lon]).addTo(map).bindPopup(first.display_name).openPopup();
+    }
+
+    document.getElementById('searchBtn').onclick = () => {
+      const q = document.getElementById('searchInput').value.trim();
+      if (q) searchLocation(q);
+    };
+
+    document.getElementById('searchInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('searchBtn').click();
+    });
+  </script>
+</body>
+</html>
