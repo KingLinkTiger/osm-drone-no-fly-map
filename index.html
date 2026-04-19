@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
 <script>
-const map = L.map('map').setView([39.5, -98.5], 4);
+const map = L.map('map').setView([38.9072, -77.0369], 11);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
@@ -14,11 +14,36 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 const layerUrl = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/FAA_UAS_FacilityMap_Data/FeatureServer/0/query';
 const pageSize = 2000;
 
+let geoJsonLayer = L.geoJSON(null, {
+  style: {
+    color: '#3388ff',
+    weight: 1,
+    fillOpacity: 0.2
+  }
+}).addTo(map);
+
+let requestToken = 0;
+
 function toQuery(params) {
   return new URLSearchParams(params).toString();
 }
 
-async function fetchAllFeatures() {
+function boundsToArcGISExtent(bounds) {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+  return {
+    xmin: sw.lng,
+    ymin: sw.lat,
+    xmax: ne.lng,
+    ymax: ne.lat,
+    spatialReference: { wkid: 4326 }
+  };
+}
+
+async function fetchVisibleFeatures() {
+  const token = ++requestToken;
+  const bounds = map.getBounds();
+  const extent = boundsToArcGISExtent(bounds);
   let allFeatures = [];
   let offset = 0;
 
@@ -28,6 +53,10 @@ async function fetchAllFeatures() {
       where: '1=1',
       outFields: '*',
       returnGeometry: 'true',
+      geometry: JSON.stringify(extent),
+      geometryType: 'esriGeometryEnvelope',
+      spatialRel: 'esriSpatialRelIntersects',
+      inSR: '4326',
       outSR: '4326',
       resultOffset: offset,
       resultRecordCount: pageSize,
@@ -38,7 +67,7 @@ async function fetchAllFeatures() {
     if (!res.ok) throw new Error(`Request failed: ${res.status}`);
 
     const data = await res.json();
-    console.log('page', offset, data);
+    if (token !== requestToken) return null;
 
     if (!data.features || data.features.length === 0) break;
 
@@ -54,31 +83,24 @@ async function fetchAllFeatures() {
   };
 }
 
-async function init() {
+async function reloadVisibleFeatures() {
   try {
-    const geojson = await fetchAllFeatures();
+    const geojson = await fetchVisibleFeatures();
+    if (!geojson) return;
 
-    console.log('total features', geojson.features.length);
-    console.log('first feature', geojson.features[0]);
-
-    const layer = L.geoJSON(geojson, {
-      style: {
-        color: '#3388ff',
-        weight: 1,
-        fillOpacity: 0.2
-      }
-    }).addTo(map);
-
-    if (layer.getBounds().isValid()) {
-      map.fitBounds(layer.getBounds());
-    } else {
-      console.warn('No valid bounds from GeoJSON');
-    }
+    geoJsonLayer.clearLayers();
+    geoJsonLayer.addData(geojson);
   } catch (err) {
     console.error(err);
-    alert(err.message);
   }
 }
 
-init();
+let timer = null;
+function scheduleReload() {
+  clearTimeout(timer);
+  timer = setTimeout(reloadVisibleFeatures, 300);
+}
+
+map.on('moveend', scheduleReload);
+reloadVisibleFeatures();
 </script>
