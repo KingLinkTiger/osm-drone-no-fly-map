@@ -226,29 +226,33 @@
     // load layers (missing files will be skipped)
     const testLayer = await loadGeoJSON('./test.geojson', 'Test');
     const FAA_UAS_FacilityMap_Data = await loadGeoJSON('https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/FAA_UAS_FacilityMap_Data/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson', 'FAA UAS Facility Map');
+    const National_Security_UAS_Flight_Restrictions = await loadGeoJSON('https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/DoD_Mar_13/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson', 'National Security UAS Flight Restrictions')
     const easaLayer = await loadGeoJSON('./easa.geojson', 'EASA');
     const djiLayer = await loadGeoJSON('./dji.geojson', 'DJI');
 
     // Map named variables: assume `test.geojson` is FAA/test data
+    const National_Security_UAS_Flight_Restrictions_layer = National_Security_UAS_Flight_Restrictions || null;
     const FAA_UAS_FacilityMap_Data_layer = FAA_UAS_FacilityMap_Data || null;
     const faaLayer = testLayer || null;
 
     const overlays = {};
     if (faaLayer) overlays['FAA Zones'] = faaLayer;
     if (FAA_UAS_FacilityMap_Data_layer) overlays['FAA UAS Facility Map'] = FAA_UAS_FacilityMap_Data_layer;
+    if (National_Security_UAS_Flight_Restrictions) overlays['National Security UAS Flight Restrictions'] = National_Security_UAS_Flight_Restrictions_layer;
     if (easaLayer) overlays['EASA Zones'] = easaLayer;
     if (djiLayer) overlays['DJI Zones'] = djiLayer;
 
     // add any loaded layers to map
     if (faaLayer) faaLayer.addTo(map);
     if (FAA_UAS_FacilityMap_Data_layer) FAA_UAS_FacilityMap_Data_layer.addTo(map);
+    if (National_Security_UAS_Flight_Restrictions_layer) National_Security_UAS_Flight_Restrictions_layer.addTo(map);
     if (easaLayer) easaLayer.addTo(map);
     if (djiLayer) djiLayer.addTo(map);
 
     L.control.layers(null, overlays, { collapsed: false }).addTo(map);
 
     // Fit bounds to any loaded layers
-    const layersToGroup = [faaLayer, FAA_UAS_FacilityMap_Data_layer, easaLayer, djiLayer].filter(l => l);
+    const layersToGroup = [faaLayer, FAA_UAS_FacilityMap_Data_layer, National_Security_UAS_Flight_Restrictions_layer, easaLayer, djiLayer].filter(l => l);
     if (layersToGroup.length) {
       const group = L.featureGroup(layersToGroup.map(l => l.getLayers ? l.getLayers() : [])
         .flat()
