@@ -28,20 +28,29 @@ const nsUrl = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/service
 const pageSize = 2000;
 const labelZoom = 12;
 
-let faaLayer = L.geoJSON(null, {
+const faaGroup = L.layerGroup([L.geoJSON(null, {
   style: { color: '#3388ff', weight: 1, fillOpacity: 0.2 }
+}), L.layerGroup()]);
+
+const nsGroup = L.geoJSON(null, {
+  style: { color: '#d7191c', weight: 1, fillOpacity: 0.15 },
+  onEachFeature: (feature, layer) => {
+    const p = feature.properties || {};
+    const content = `
+      <div style="min-width: 200px">
+        <b>Proponent:</b> ${p.Proponent || 'N/A'}<br>
+        <b>Reason:</b> ${p.Reason || 'N/A'}<br>
+        <b>SITE:</b> ${p.SITE || 'N/A'}<br>
+        <b>Base:</b> ${p.Base || 'N/A'}<br>
+        <b>Branch:</b> ${p.Branch || 'N/A'}
+      </div>
+    `;
+    layer.bindPopup(content);
+  }
 });
 
-let nsLayer = L.geoJSON(null, {
-  style: { color: '#d7191c', weight: 1, fillOpacity: 0.15 }
-});
-
-let labelLayer = L.layerGroup();
-
-let overlayBounds = {
-  faa: null,
-  ns: null
-};
+let faaGeojson = null;
+let nsGeojson = null;
 
 function toQuery(params) {
   return new URLSearchParams(params).toString();
@@ -86,7 +95,6 @@ async function fetchVisibleFeatures(layerUrl) {
 
     const data = await res.json();
     if (!data.features || data.features.length === 0) break;
-
     allFeatures.push(...data.features);
 
     if (data.features.length < pageSize) break;
@@ -96,18 +104,20 @@ async function fetchVisibleFeatures(layerUrl) {
   return { type: 'FeatureCollection', features: allFeatures };
 }
 
-function updateLabels(geojson) {
-  labelLayer.clearLayers();
+function updateLabels() {
+  const labels = faaGroup.getLayers()[1];
+  labels.clearLayers();
+
   if (map.getZoom() < labelZoom) return;
 
-  geojson.features.forEach(feature => {
+  faaGeojson?.features?.forEach(feature => {
     const ceiling = feature.properties?.CEILING;
     if (ceiling == null) return;
 
     const temp = L.geoJSON(feature);
     const center = temp.getBounds().getCenter();
 
-    labelLayer.addLayer(
+    labels.addLayer(
       L.marker(center, {
         interactive: false,
         icon: L.divIcon({
@@ -120,23 +130,18 @@ function updateLabels(geojson) {
   });
 }
 
-async function reloadLayer(targetLayer, url, key) {
-  const geojson = await fetchVisibleFeatures(url);
-  targetLayer.clearLayers();
-  targetLayer.addData(geojson);
-
-  if (key === 'faa') overlayBounds.faa = geojson;
-  if (key === 'ns') overlayBounds.ns = geojson;
-
-  if (targetLayer === faaLayer) updateLabels(geojson);
-}
-
 async function reloadAll() {
   try {
-    await Promise.all([
-      reloadLayer(faaLayer, faaUrl, 'faa'),
-      reloadLayer(nsLayer, nsUrl, 'ns')
-    ]);
+    faaGeojson = await fetchVisibleFeatures(faaUrl);
+    nsGeojson = await fetchVisibleFeatures(nsUrl);
+
+    faaGroup.getLayers()[0].clearLayers();
+    faaGroup.getLayers()[0].addData(faaGeojson);
+
+    nsGroup.clearLayers();
+    nsGroup.addData(nsGeojson);
+
+    updateLabels();
   } catch (err) {
     console.error(err);
   }
@@ -150,18 +155,14 @@ function scheduleReload() {
 
 map.on('moveend', scheduleReload);
 
-map.on('zoomend', () => {
-  const faaGeo = faaLayer.toGeoJSON();
-  updateLabels(faaGeo);
-});
+map.on('zoomend', updateLabels);
 
 const overlays = {
-  'FAA FacilityMap': faaLayer,
-  'National Security UAS Flight Restrictions': nsLayer,
-  'CEILING Labels': labelLayer
+  'FAA FacilityMap (with CEILING)': faaGroup,
+  'National Security UAS Flight Restrictions': nsGroup
 };
 
-L.control.layers(null, overlays, { position: 'topright', collapsed: false }).addTo(map);
+L.control.layers(null, overlays, { position: 'topright' }).addTo(map);
 
 reloadAll();
 </script>
