@@ -80,6 +80,7 @@
       fillColor: '#ff0000',
       fillOpacity: 0.35
     };
+    const LABEL_MIN_ZOOM = 10; // labels hidden when map zoom is below this
 
     function popupHTML(props) {
       return `
@@ -209,6 +210,8 @@
                     // remember label so it can be removed with the layer
                     lyr._ceilingLabel = label;
                     lyr.on('remove', () => { if (lyr._ceilingLabel) map.removeLayer(lyr._ceilingLabel); });
+                    // set initial visibility according to zoom
+                    if (map.getZoom() < LABEL_MIN_ZOOM) map.removeLayer(lyr._ceilingLabel);
                   }
                 }
               } catch (e) {
@@ -223,16 +226,133 @@
       }
     }
 
+    // FAA Layers https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services
+
     // load layers (missing files will be skipped)
     const testLayer = await loadGeoJSON('./test.geojson', 'Test');
-    const FAA_UAS_FacilityMap_Data = await loadGeoJSON('https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/FAA_UAS_FacilityMap_Data/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson', 'FAA UAS Facility Map');
-    const National_Security_UAS_Flight_Restrictions = await loadGeoJSON('https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/DoD_Mar_13/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson', 'National Security UAS Flight Restrictions')
+    // We'll load the FAA ArcGIS dataset by viewport (bbox) to avoid the server-side 2000 feature cap
+    // Create an empty layer group to hold features fetched for the current viewport
+    const FAA_UAS_FacilityMap_Data_layer = L.layerGroup();
+    // Start by fetching the current viewport
+    const ARC_GIS_BASE = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/FAA_UAS_FacilityMap_Data/FeatureServer/0/query';
     const easaLayer = await loadGeoJSON('./easa.geojson', 'EASA');
     const djiLayer = await loadGeoJSON('./dji.geojson', 'DJI');
 
+    // Helper: fetch ArcGIS geojson for a bounding box (lon/lat, xmin,ymin,xmax,ymax)
+    async function fetchArcgisBBox(baseUrl, bbox) {
+      // bbox: [xmin, ymin, xmax, ymax] in WGS84
+      const [xmin, ymin, xmax, ymax] = bbox;
+      const params = new URLSearchParams({
+        f: 'geojson',
+        outFields: '*',
+        geometry: `${xmin},${ymin},${xmax},${ymax}`,
+        geometryType: 'esriGeometryEnvelope',
+        inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects'
+      });
+      const url = `${baseUrl}?${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`ArcGIS bbox fetch failed: ${res.status}`);
+      return res.json();
+    }
+
+    // Helper: create a geojson layer from data using the same options used by loadGeoJSON
+    function createGeoJSONLayerFromData(data) {
+      if (!data || !data.features) return L.geoJSON();
+      return L.geoJSON(data, {
+        style: (feature) => {
+          const props = (feature && feature.properties) || {};
+          return {
+            color: props.color || '#b30000',
+            weight: 1,
+            fillColor: props.color || '#ff0000',
+            fillOpacity: (props.fillOpacity !== undefined) ? props.fillOpacity : 0.35
+          };
+        },
+        pointToLayer: (feature, latlng) => {
+          const props = (feature && feature.properties) || {};
+          if (feature && feature.geometry && feature.geometry.type === 'Point' && props.radius_m) {
+            const c = L.circle(latlng, {
+              radius: Number(props.radius_m) || 0,
+              color: props.color || '#b30000',
+              weight: 2,
+              fillColor: props.color || '#ff0000',
+              fillOpacity: (props.fillOpacity !== undefined) ? props.fillOpacity : 0.28
+            });
+            const pid = props.pattern === 'striped' ? ensureStripedPattern(props.color || '#ff0000') : null;
+            c.once('add', () => {
+              const el = c.getElement();
+              if (!el) return;
+              if (pid) el.setAttribute('fill', `url(#${pid})`);
+              else c.bringToFront();
+            });
+            return c;
+          }
+          return L.marker(latlng);
+        },
+        onEachFeature: (feature, lyr) => {
+          const props = feature.properties || {};
+          lyr.bindPopup(popupHTML(props) + `<pre style="max-width:320px;margin-top:6px;">${JSON.stringify(props,null,2)}</pre>`, { maxWidth: 400 });
+          lyr.once('add', () => {
+            const el = lyr.getElement && lyr.getElement();
+            if (el) {
+              if (props.pattern === 'striped') {
+                const pid = ensureStripedPattern(props.color || '#ff0000');
+                el.setAttribute('fill', `url(#${pid})`);
+              } else {
+                if (lyr.bringToFront) lyr.bringToFront();
+              }
+            }
+            try {
+              const geomType = feature && feature.geometry && feature.geometry.type;
+              if ((geomType === 'Polygon' || geomType === 'MultiPolygon') && props.CEILING !== undefined && props.CEILING !== null && String(props.CEILING).trim() !== '') {
+                const center = (lyr.getBounds && lyr.getBounds().getCenter()) || null;
+                if (center) {
+                  const label = L.marker(center, {
+                    interactive: false,
+                    keyboard: false,
+                    icon: L.divIcon({ className: 'feature-label', html: `<div>${String(props.CEILING)}</div>` })
+                  }).addTo(map);
+                  if (label.setZIndexOffset) label.setZIndexOffset(1000);
+                  lyr._ceilingLabel = label;
+                  lyr.on('remove', () => { if (lyr._ceilingLabel) map.removeLayer(lyr._ceilingLabel); });
+                  if (map.getZoom() < LABEL_MIN_ZOOM) map.removeLayer(lyr._ceilingLabel);
+                }
+              }
+            } catch (e) { console.warn('Failed to add CEILING label', e); }
+          });
+        }
+      });
+    }
+
+    // Debounced viewport loader for ArcGIS features
+    let _arcgisViewportTimer = null;
+    async function updateArcgisViewport() {
+      if (_arcgisViewportTimer) clearTimeout(_arcgisViewportTimer);
+      _arcgisViewportTimer = setTimeout(async () => {
+        try {
+          const b = map.getBounds();
+          const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+          const data = await fetchArcgisBBox(ARC_GIS_BASE, bbox);
+          // Clear previous data and add new
+          FAA_UAS_FacilityMap_Data_layer.clearLayers();
+          const layer = createGeoJSONLayerFromData(data);
+          // add all internal layers from created layer into the group so popups/events/styles remain
+          layer.eachLayer(l => FAA_UAS_FacilityMap_Data_layer.addLayer(l));
+          updateLabelVisibility();
+        } catch (e) { console.warn('ArcGIS viewport load failed', e); }
+      }, 250);
+    }
+
+    // initial load for the current viewport
+    updateArcgisViewport();
+
+    // update on moveend / zoomend
+    map.on('moveend', updateArcgisViewport);
+    map.on('zoomend', updateArcgisViewport);
+
     // Map named variables: assume `test.geojson` is FAA/test data
     const National_Security_UAS_Flight_Restrictions_layer = National_Security_UAS_Flight_Restrictions || null;
-    const FAA_UAS_FacilityMap_Data_layer = FAA_UAS_FacilityMap_Data || null;
     const faaLayer = testLayer || null;
 
     const overlays = {};
@@ -248,6 +368,34 @@
     if (National_Security_UAS_Flight_Restrictions_layer) National_Security_UAS_Flight_Restrictions_layer.addTo(map);
     if (easaLayer) easaLayer.addTo(map);
     if (djiLayer) djiLayer.addTo(map);
+
+      // Helper: show/hide CEILING labels depending on zoom
+      function updateLabelVisibility() {
+        try {
+          const minZoom = LABEL_MIN_ZOOM;
+          Object.values(overlays).forEach(layer => {
+            if (!layer || !layer.eachLayer) return;
+            layer.eachLayer(l => {
+              if (l && l._ceilingLabel) {
+                const hasLabelOnMap = map.hasLayer(l._ceilingLabel);
+                if (map.getZoom() >= minZoom && !hasLabelOnMap) map.addLayer(l._ceilingLabel);
+                if (map.getZoom() < minZoom && hasLabelOnMap) map.removeLayer(l._ceilingLabel);
+              }
+              // If polygon layer has no SVG element, try to nudge style to force render and log
+              const geomType = l.feature && l.feature.geometry && l.feature.geometry.type;
+              if ((geomType === 'Polygon' || geomType === 'MultiPolygon') && (!l.getElement || !l.getElement())) {
+                // attempt to set style as a nudge
+                try { if (l.setStyle) l.setStyle({ weight: 1, fillOpacity: 0.35 }); } catch (e) {}
+                console.warn('Polygon layer may not have an SVG element yet (possible renderer or loading issue):', l.feature && l.feature.id || l.feature && l.feature.properties && l.feature.properties.name);
+              }
+            });
+          });
+        } catch (e) { console.warn('updateLabelVisibility error', e); }
+      }
+
+      map.on('zoomend', updateLabelVisibility);
+      // initial call
+      updateLabelVisibility();
 
     L.control.layers(null, overlays, { collapsed: false }).addTo(map);
 
