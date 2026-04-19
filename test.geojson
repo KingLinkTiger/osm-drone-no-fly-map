@@ -4,7 +4,7 @@
     {
       "type": "Feature",
       "properties": {
-        "name": "Washington, DC Special Flight Rules Area (SFRA) - Inner Area",
+        "name": "Washington, DC Special Flight Rules Area (SFRA) - Inner Ring",
         "authority": "FAA",
         "restriction_type": "No-fly",
         "description": "DC Area Prohibited & Restricted Airspace",
@@ -12,6 +12,25 @@
         "color": "#ff0000",
         "radius_miles": 15,
         "radius_m": 24140.16
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [ -77.04023, 38.851242 ]
+      }
+    }
+    ,
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Washington, DC Special Flight Rules Area (SFRA) - Outer Ring",
+        "authority": "FAA",
+        "restriction_type": "No-fly",
+        "description": "DC Area Prohibited & Restricted Airspace — Striped 30 mile radius",
+        "source_url": "https://www.faa.gov/uas/resources/community_engagement/no_drone_zone/dc",
+        "color": "#ff0000",
+        "pattern": "striped",
+        "radius_miles": 30,
+        "radius_m": 48280.32
       },
       "geometry": {
         "type": "Point",

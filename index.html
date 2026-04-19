@@ -82,6 +82,41 @@
       `;
     }
 
+    function colorId(color) {
+      return String(color).replace('#', '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    }
+
+    function ensureStripedPattern(color) {
+      const id = 'stripe-' + colorId(color);
+      // check existing
+      if (document.getElementById(id)) return id;
+      const defs = document.querySelector('#svg-patterns defs');
+      if (!defs) return id;
+
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const pattern = document.createElementNS(svgNS, 'pattern');
+      pattern.setAttribute('id', id);
+      pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+      pattern.setAttribute('width', '8');
+      pattern.setAttribute('height', '8');
+      pattern.setAttribute('patternTransform', 'rotate(45)');
+
+      const rectBg = document.createElementNS(svgNS, 'rect');
+      rectBg.setAttribute('width', '8');
+      rectBg.setAttribute('height', '8');
+      rectBg.setAttribute('fill', 'transparent');
+
+      const rectStripe = document.createElementNS(svgNS, 'rect');
+      rectStripe.setAttribute('width', '4');
+      rectStripe.setAttribute('height', '8');
+      rectStripe.setAttribute('fill', color);
+
+      pattern.appendChild(rectBg);
+      pattern.appendChild(rectStripe);
+      defs.appendChild(pattern);
+      return id;
+    }
+
     async function loadGeoJSON(url, label) {
       try {
         const res = await fetch(url);
@@ -101,19 +136,34 @@
           pointToLayer: (feature, latlng) => {
             const props = (feature && feature.properties) || {};
             if (feature && feature.geometry && feature.geometry.type === 'Point' && props.radius_m) {
-              return L.circle(latlng, {
+              const c = L.circle(latlng, {
                 radius: Number(props.radius_m) || 0,
                 color: props.color || '#b30000',
                 weight: 2,
                 fillColor: props.color || '#ff0000',
                 fillOpacity: (props.fillOpacity !== undefined) ? props.fillOpacity : 0.28
               });
+              if (props.pattern === 'striped') {
+                const pid = ensureStripedPattern(props.color || '#ff0000');
+                c.once('add', () => {
+                  const el = c.getElement();
+                  if (el) el.setAttribute('fill', `url(#${pid})`);
+                });
+              }
+              return c;
             }
             return L.marker(latlng);
           },
           onEachFeature: (feature, lyr) => {
             const props = feature.properties || {};
             lyr.bindPopup(popupHTML(props), { maxWidth: 320 });
+            if (props.pattern === 'striped') {
+              const pid = ensureStripedPattern(props.color || '#ff0000');
+              lyr.once('add', () => {
+                const el = lyr.getElement && lyr.getElement();
+                if (el) el.setAttribute('fill', `url(#${pid})`);
+              });
+            }
           }
         });
       } catch (err) {
