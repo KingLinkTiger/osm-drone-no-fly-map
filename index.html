@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
 <script>
-const map = L.map('map').setView([-77.04023, 38.851242 ], 8);
+const map = L.map('map').setView([39.5, -98.5], 4);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
@@ -28,6 +28,7 @@ async function fetchAllFeatures() {
       where: '1=1',
       outFields: '*',
       returnGeometry: 'true',
+      outSR: '4326',
       resultOffset: offset,
       resultRecordCount: pageSize,
       orderByFields: 'OBJECTID ASC'
@@ -37,6 +38,8 @@ async function fetchAllFeatures() {
     if (!res.ok) throw new Error(`Request failed: ${res.status}`);
 
     const data = await res.json();
+    console.log('page', offset, data);
+
     if (!data.features || data.features.length === 0) break;
 
     allFeatures.push(...data.features);
@@ -55,21 +58,21 @@ async function init() {
   try {
     const geojson = await fetchAllFeatures();
 
+    console.log('total features', geojson.features.length);
+    console.log('first feature', geojson.features[0]);
+
     const layer = L.geoJSON(geojson, {
       style: {
         color: '#3388ff',
         weight: 1,
         fillOpacity: 0.2
-      },
-      onEachFeature: (feature, lyr) => {
-        const p = feature.properties || {};
-        const label = p.NAME || p.name || p.OBJECTID || 'Feature';
-        lyr.bindPopup(String(label));
       }
     }).addTo(map);
 
     if (layer.getBounds().isValid()) {
       map.fitBounds(layer.getBounds());
+    } else {
+      console.warn('No valid bounds from GeoJSON');
     }
   } catch (err) {
     console.error(err);
