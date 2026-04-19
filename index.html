@@ -52,6 +52,9 @@
     <input id="searchInput" type="text" placeholder="Search a location..." />
     <button id="searchBtn">Search</button>
     <button id="resetBtn">Reset View</button>
+    <label style="display:block;margin-top:8px; font-size:13px;">
+      <input id="labelsToggle" type="checkbox" checked /> Show CEILING labels
+    </label>
     <div class="note">
       Red overlays show source-reported drone restriction zones from FAA, EASA, and DJI.
     </div>
@@ -82,6 +85,13 @@
     };
     const LABEL_MIN_ZOOM = 10; // labels hidden when map zoom is below this
 
+    // overlays container (declared early so viewport loader and label updater can reference it)
+    const overlays = {};
+    // label toggle and cache config
+    let LABELS_ENABLED = true;
+    const ARC_CACHE = new Map();
+    const ARC_CACHE_GRID_DEG = 0.5; // 0.5 degree tiles for caching
+
     function popupHTML(props) {
       return `
         <div class="popup-title">${props.name || 'Restricted Zone'}</div>
@@ -93,6 +103,39 @@
           <a href="${props.source_url || '#'}" target="_blank" rel="noopener">Source</a>
         </div>
       `;
+    }
+
+    // helper: compute tile x/y indices covering bbox
+    function tilesForBbox(bbox, grid) {
+      const [xmin, ymin, xmax, ymax] = bbox;
+      const x0 = Math.floor(xmin / grid);
+      const x1 = Math.floor(xmax / grid);
+      const y0 = Math.floor(ymin / grid);
+      const y1 = Math.floor(ymax / grid);
+      const tiles = [];
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) tiles.push([x, y]);
+      return tiles;
+    }
+
+    function tileBbox(x, y, grid) {
+      return [x * grid, y * grid, (x + 1) * grid, (y + 1) * grid];
+    }
+
+    function tileKey(x, y) { return `${x}_${y}`; }
+
+    async function fetchArcgisTile(baseUrl, x, y) {
+      const key = tileKey(x, y);
+      if (ARC_CACHE.has(key)) return ARC_CACHE.get(key);
+      const bbox = tileBbox(x, y, ARC_CACHE_GRID_DEG);
+      try {
+        const data = await fetchArcgisBBox(baseUrl, bbox);
+        ARC_CACHE.set(key, data);
+        return data;
+      } catch (e) {
+        console.warn('fetchArcgisTile failed', key, e);
+        ARC_CACHE.set(key, { type: 'FeatureCollection', features: [] });
+        return ARC_CACHE.get(key);
+      }
     }
 
     function colorId(color) {
@@ -196,23 +239,21 @@
                 if ((geomType === 'Polygon' || geomType === 'MultiPolygon') && props.CEILING !== undefined && props.CEILING !== null && String(props.CEILING).trim() !== '') {
                   // compute a center; using bounds center is robust for MultiPolygons
                   const center = (lyr.getBounds && lyr.getBounds().getCenter()) || null;
-                  if (center) {
-                    const label = L.marker(center, {
-                      interactive: false,
-                      keyboard: false,
-                      icon: L.divIcon({
-                        className: 'feature-label',
-                        html: `<div>${String(props.CEILING)}</div>`
-                      })
-                    }).addTo(map);
-                    // bring label above vectors
-                    if (label.setZIndexOffset) label.setZIndexOffset(1000);
-                    // remember label so it can be removed with the layer
-                    lyr._ceilingLabel = label;
-                    lyr.on('remove', () => { if (lyr._ceilingLabel) map.removeLayer(lyr._ceilingLabel); });
-                    // set initial visibility according to zoom
-                    if (map.getZoom() < LABEL_MIN_ZOOM) map.removeLayer(lyr._ceilingLabel);
-                  }
+                          if (center) {
+                            const label = L.marker(center, {
+                              interactive: false,
+                              keyboard: false,
+                              icon: L.divIcon({
+                                className: 'feature-label',
+                                html: `<div>${String(props.CEILING)}</div>`
+                              })
+                            });
+                            // remember label so it can be removed with the layer
+                            lyr._ceilingLabel = label;
+                            lyr.on('remove', () => { if (lyr._ceilingLabel) map.removeLayer(lyr._ceilingLabel); });
+                            // add label only if enabled and zoom high enough
+                            if (LABELS_ENABLED && map.getZoom() >= LABEL_MIN_ZOOM) map.addLayer(lyr._ceilingLabel);
+                          }
                 }
               } catch (e) {
                 console.warn('Failed to add CEILING label', e);
@@ -312,11 +353,10 @@
                     interactive: false,
                     keyboard: false,
                     icon: L.divIcon({ className: 'feature-label', html: `<div>${String(props.CEILING)}</div>` })
-                  }).addTo(map);
-                  if (label.setZIndexOffset) label.setZIndexOffset(1000);
+                  });
                   lyr._ceilingLabel = label;
                   lyr.on('remove', () => { if (lyr._ceilingLabel) map.removeLayer(lyr._ceilingLabel); });
-                  if (map.getZoom() < LABEL_MIN_ZOOM) map.removeLayer(lyr._ceilingLabel);
+                  if (LABELS_ENABLED && map.getZoom() >= LABEL_MIN_ZOOM) map.addLayer(lyr._ceilingLabel);
                 }
               }
             } catch (e) { console.warn('Failed to add CEILING label', e); }
@@ -333,11 +373,26 @@
         try {
           const b = map.getBounds();
           const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
-          const data = await fetchArcgisBBox(ARC_GIS_BASE, bbox);
+          // determine tiles that cover viewport and fetch/cache them
+          const tiles = tilesForBbox(bbox, ARC_CACHE_GRID_DEG);
+          const promises = tiles.map(([tx, ty]) => fetchArcgisTile(ARC_GIS_BASE, tx, ty));
+          const results = await Promise.all(promises);
+          // merge features and dedupe by OBJECTID if present
+          const features = [];
+          const seen = new Set();
+          for (const res of results) {
+            if (!res || !res.features) continue;
+            for (const f of res.features) {
+              const id = (f.properties && (f.properties.OBJECTID || f.properties.objectid || f.properties.OBJECTID_)) || f.id || JSON.stringify(f.geometry);
+              if (seen.has(id)) continue;
+              seen.add(id);
+              features.push(f);
+            }
+          }
+          const data = { type: 'FeatureCollection', features };
           // Clear previous data and add new
           FAA_UAS_FacilityMap_Data_layer.clearLayers();
           const layer = createGeoJSONLayerFromData(data);
-          // add all internal layers from created layer into the group so popups/events/styles remain
           layer.eachLayer(l => FAA_UAS_FacilityMap_Data_layer.addLayer(l));
           updateLabelVisibility();
         } catch (e) { console.warn('ArcGIS viewport load failed', e); }
@@ -355,7 +410,6 @@
     const National_Security_UAS_Flight_Restrictions_layer = National_Security_UAS_Flight_Restrictions || null;
     const faaLayer = testLayer || null;
 
-    const overlays = {};
     if (faaLayer) overlays['FAA Zones'] = faaLayer;
     if (FAA_UAS_FacilityMap_Data_layer) overlays['FAA UAS Facility Map'] = FAA_UAS_FacilityMap_Data_layer;
     if (National_Security_UAS_Flight_Restrictions) overlays['National Security UAS Flight Restrictions'] = National_Security_UAS_Flight_Restrictions_layer;
@@ -396,6 +450,15 @@
       map.on('zoomend', updateLabelVisibility);
       // initial call
       updateLabelVisibility();
+
+      // wire the labels toggle UI
+      const labelsToggleEl = document.getElementById('labelsToggle');
+      if (labelsToggleEl) {
+        labelsToggleEl.addEventListener('change', (e) => {
+          LABELS_ENABLED = !!e.target.checked;
+          updateLabelVisibility();
+        });
+      }
 
     L.control.layers(null, overlays, { collapsed: false }).addTo(map);
 
