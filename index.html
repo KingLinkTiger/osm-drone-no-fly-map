@@ -25,6 +25,8 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 const faaUrl = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/FAA_UAS_FacilityMap_Data/FeatureServer/0/query';
 const nsUrl = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/DoD_Mar_13/FeatureServer/0/query';
+const airportUrl = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/US_Airport/FeatureServer/0/query';
+const tfrUrl = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/National_Defense_Airspace_TFR_Areas/FeatureServer/0/query';
 const pageSize = 2000;
 const labelZoom = 12;
 
@@ -49,8 +51,34 @@ const nsGroup = L.geoJSON(null, {
   }
 });
 
+const airportGroup = L.geoJSON(null, {
+  pointToLayer: (feature, latlng) => {
+    return L.circleMarker(latlng, {
+      radius: 4,
+      fillColor: '#2ca02c',
+      color: '#fff',
+      weight: 1,
+      opacity: 1,
+      fillOpacity: 0.8
+    });
+  },
+  onEachFeature: (feature, layer) => {
+    const p = feature.properties || {};
+    const name = p.NAME || p.name || p.AIRPORT_NAME || 'Airport';
+    layer.bindPopup(`<b>${name}</b>`);
+  }
+});
+
+const tfrGroup = L.geoJSON(null, {
+  style: { color: '#fdae61', weight: 2, fillOpacity: 0.1 },
+  onEachFeature: (feature, layer) => {
+    const p = feature.properties || {};
+    const name = p.NAME || p.name || p.DESCRIPTION || 'TFR Area';
+    layer.bindPopup(`<b>${name}</b>`);
+  }
+});
+
 let faaGeojson = null;
-let nsGeojson = null;
 
 function toQuery(params) {
   return new URLSearchParams(params).toString();
@@ -133,13 +161,21 @@ function updateLabels() {
 async function reloadAll() {
   try {
     faaGeojson = await fetchVisibleFeatures(faaUrl);
-    nsGeojson = await fetchVisibleFeatures(nsUrl);
+    const nsGeojson = await fetchVisibleFeatures(nsUrl);
+    const airportGeojson = await fetchVisibleFeatures(airportUrl);
+    const tfrGeojson = await fetchVisibleFeatures(tfrUrl);
 
     faaGroup.getLayers()[0].clearLayers();
     faaGroup.getLayers()[0].addData(faaGeojson);
 
     nsGroup.clearLayers();
     nsGroup.addData(nsGeojson);
+
+    airportGroup.clearLayers();
+    airportGroup.addData(airportGeojson);
+
+    tfrGroup.clearLayers();
+    tfrGroup.addData(tfrGeojson);
 
     updateLabels();
   } catch (err) {
@@ -159,7 +195,9 @@ map.on('zoomend', updateLabels);
 
 const overlays = {
   'FAA FacilityMap (with CEILING)': faaGroup,
-  'National Security UAS Flight Restrictions': nsGroup
+  'National Security UAS Flight Restrictions': nsGroup,
+  'US Airports': airportGroup,
+  'National Defense TFRs': tfrGroup
 };
 
 L.control.layers(null, overlays, { position: 'topright' }).addTo(map);
