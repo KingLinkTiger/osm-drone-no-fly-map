@@ -47,6 +47,11 @@
 
   <div id="map"></div>
 
+  <!-- SVG defs for fill patterns (kept hidden) -->
+  <svg id="svg-patterns" style="position: absolute; width:0; height:0; pointer-events: none;">
+    <defs></defs>
+  </svg>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     (async () => {
@@ -84,7 +89,28 @@
         const data = await res.json();
 
         return L.geoJSON(data, {
-          style,
+          style: (feature) => {
+            const props = (feature && feature.properties) || {};
+            return {
+              color: props.color || '#b30000',
+              weight: 2,
+              fillColor: props.color || '#ff0000',
+              fillOpacity: (props.fillOpacity !== undefined) ? props.fillOpacity : 0.28
+            };
+          },
+          pointToLayer: (feature, latlng) => {
+            const props = (feature && feature.properties) || {};
+            if (feature && feature.geometry && feature.geometry.type === 'Point' && props.radius_m) {
+              return L.circle(latlng, {
+                radius: Number(props.radius_m) || 0,
+                color: props.color || '#b30000',
+                weight: 2,
+                fillColor: props.color || '#ff0000',
+                fillOpacity: (props.fillOpacity !== undefined) ? props.fillOpacity : 0.28
+              });
+            }
+            return L.marker(latlng);
+          },
           onEachFeature: (feature, lyr) => {
             const props = feature.properties || {};
             lyr.bindPopup(popupHTML(props), { maxWidth: 320 });
