@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="origin-when-cross-origin" />
   <title>Drone No-Fly Zones</title>
   <link
     rel="stylesheet"
@@ -48,6 +49,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    (async () => {
     const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
 
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -76,39 +78,54 @@
     }
 
     async function loadGeoJSON(url, label) {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Failed to load ${label}`);
-      const data = await res.json();
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to load ${label}`);
+        const data = await res.json();
 
-      const layer = L.geoJSON(data, {
-        style,
-        onEachFeature: (feature, lyr) => {
-          const props = feature.properties || {};
-          lyr.bindPopup(popupHTML(props), { maxWidth: 320 });
-        }
-      });
-
-      return layer;
+        return L.geoJSON(data, {
+          style,
+          onEachFeature: (feature, lyr) => {
+            const props = feature.properties || {};
+            lyr.bindPopup(popupHTML(props), { maxWidth: 320 });
+          }
+        });
+      } catch (err) {
+        console.warn(err.message);
+        return null;
+      }
     }
 
-    const faaLayer = await loadGeoJSON('./faa.geojson', 'FAA');
+    // load layers (missing files will be skipped)
+    const testLayer = await loadGeoJSON('./test.geojson', 'Test');
     const easaLayer = await loadGeoJSON('./easa.geojson', 'EASA');
     const djiLayer = await loadGeoJSON('./dji.geojson', 'DJI');
 
-    const overlays = {
-      'FAA Zones': faaLayer,
-      'EASA Zones': easaLayer,
-      'DJI Zones': djiLayer
-    };
+    // Map named variables: assume `test.geojson` is FAA/test data
+    const faaLayer = testLayer || null;
 
-    faaLayer.addTo(map);
-    easaLayer.addTo(map);
-    djiLayer.addTo(map);
+    const overlays = {};
+    if (faaLayer) overlays['FAA Zones'] = faaLayer;
+    if (easaLayer) overlays['EASA Zones'] = easaLayer;
+    if (djiLayer) overlays['DJI Zones'] = djiLayer;
+
+    // add any loaded layers to map
+    if (faaLayer) faaLayer.addTo(map);
+    if (easaLayer) easaLayer.addTo(map);
+    if (djiLayer) djiLayer.addTo(map);
 
     L.control.layers(null, overlays, { collapsed: false }).addTo(map);
 
-    const group = L.featureGroup([faaLayer, easaLayer, djiLayer]);
-    if (group.getLayers().length) map.fitBounds(group.getBounds(), { padding: [20, 20] });
+    // Fit bounds to any loaded layers
+    const layersToGroup = [faaLayer, easaLayer, djiLayer].filter(l => l);
+    if (layersToGroup.length) {
+      const group = L.featureGroup(layersToGroup.map(l => l.getLayers ? l.getLayers() : [])
+        .flat()
+        .map(g => (g instanceof L.Layer ? g : null))
+        .filter(Boolean)
+      );
+      if (group.getLayers().length) map.fitBounds(group.getBounds(), { padding: [20, 20] });
+    }
 
     document.getElementById('resetBtn').onclick = () => {
       map.setView([20, 0], 2);
@@ -139,6 +156,7 @@
     document.getElementById('searchInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') document.getElementById('searchBtn').click();
     });
+    })();
   </script>
 </body>
 </html>
