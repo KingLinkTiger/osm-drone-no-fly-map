@@ -32,6 +32,18 @@
     }
     .note { font-size: 12px; color: #555; margin-top: 8px; line-height: 1.3; }
     .popup-title { font-weight: 700; margin-bottom: 4px; }
+    .feature-label {
+      pointer-events: none;
+      font-weight: 700;
+      background: rgba(255,255,255,0.9);
+      padding: 4px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(0,0,0,0.12);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+      font-size: 12px;
+      color: #000;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -64,9 +76,9 @@
 
     const style = {
       color: '#b30000',
-      weight: 2,
+      weight: 1,
       fillColor: '#ff0000',
-      fillOpacity: 0.28
+      fillOpacity: 0.35
     };
 
     function popupHTML(props) {
@@ -128,9 +140,9 @@
             const props = (feature && feature.properties) || {};
             return {
               color: props.color || '#b30000',
-              weight: 2,
+              weight: 1,
               fillColor: props.color || '#ff0000',
-              fillOpacity: (props.fillOpacity !== undefined) ? props.fillOpacity : 0.28
+              fillOpacity: (props.fillOpacity !== undefined) ? props.fillOpacity : 0.35
             };
           },
           pointToLayer: (feature, latlng) => {
@@ -160,16 +172,47 @@
           },
           onEachFeature: (feature, lyr) => {
             const props = feature.properties || {};
-            lyr.bindPopup(popupHTML(props), { maxWidth: 320 });
+            // Bind a popup that shows common fields and a fallback that prints all properties
+            lyr.bindPopup(popupHTML(props) + `<pre style="max-width:320px;margin-top:6px;">${JSON.stringify(props,null,2)}</pre>`, { maxWidth: 400 });
+
+            // After the layer is added to the map, apply pattern fills for polygons or bring non-striped to front
             lyr.once('add', () => {
               const el = lyr.getElement && lyr.getElement();
-              if (!el) return;
-              if (props.pattern === 'striped') {
-                const pid = ensureStripedPattern(props.color || '#ff0000');
-                el.setAttribute('fill', `url(#${pid})`);
-              } else {
-                // non-striped: bring polygon/shape to front so it appears above striped ones
-                lyr.bringToFront();
+              // if it's a vector SVG element
+              if (el) {
+                if (props.pattern === 'striped') {
+                  const pid = ensureStripedPattern(props.color || '#ff0000');
+                  el.setAttribute('fill', `url(#${pid})`);
+                } else {
+                  // non-striped: bring polygon/shape to front so it appears above striped ones
+                  if (lyr.bringToFront) lyr.bringToFront();
+                }
+              }
+
+              // If this feature has a CEILING property and it's a polygon/multipolygon, place a centered label
+              try {
+                const geomType = feature && feature.geometry && feature.geometry.type;
+                if ((geomType === 'Polygon' || geomType === 'MultiPolygon') && props.CEILING !== undefined && props.CEILING !== null && String(props.CEILING).trim() !== '') {
+                  // compute a center; using bounds center is robust for MultiPolygons
+                  const center = (lyr.getBounds && lyr.getBounds().getCenter()) || null;
+                  if (center) {
+                    const label = L.marker(center, {
+                      interactive: false,
+                      keyboard: false,
+                      icon: L.divIcon({
+                        className: 'feature-label',
+                        html: `<div>${String(props.CEILING)}</div>`
+                      })
+                    }).addTo(map);
+                    // bring label above vectors
+                    if (label.setZIndexOffset) label.setZIndexOffset(1000);
+                    // remember label so it can be removed with the layer
+                    lyr._ceilingLabel = label;
+                    lyr.on('remove', () => { if (lyr._ceilingLabel) map.removeLayer(lyr._ceilingLabel); });
+                  }
+                }
+              } catch (e) {
+                console.warn('Failed to add CEILING label', e);
               }
             });
           }
